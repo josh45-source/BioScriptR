@@ -1,0 +1,145 @@
+---
+title: "DESeq2 Basic Two-Group Differential Expression"
+category: "RNA-seq"
+subcategory: "Differential Expression"
+packages: "DESeq2, dplyr, ggplot2"
+r_version: "4.4.0"
+package_versions: "DESeq2 1.42.0, dplyr 1.1.4, ggplot2 3.5.0"
+author: "Joash Joshua Ayo"
+date: "2026-04-04"
+difficulty: "Beginner"
+---
+
+## Overview
+This script performs a standard two-group differential expression analysis using DESeq2.
+It takes a raw count matrix and a metadata file, runs the DESeq2 pipeline, and outputs
+a results table of differentially expressed genes (DEGs).
+
+## Use Case
+Use this when you have RNA-seq count data (genes x samples) and want to compare
+gene expression between two conditions (e.g. treated vs. control, disease vs. healthy).
+
+## Input
+- `counts.csv` — Raw integer count matrix. Rows = genes (Ensembl ID or gene symbol),
+  columns = sample names. Must NOT be normalized (DESeq2 needs raw counts).
+- `metadata.csv` — Sample metadata with at least two columns:
+  - `sample` — must match column names in counts exactly
+  - `condition` — the grouping variable (e.g. "control", "treated")
+
+## Required Packages
+```r
+# Install if needed:
+# if (!requireNamespace("BiocManager")) install.packages("BiocManager")
+# BiocManager::install("DESeq2")
+# install.packages("dplyr")
+# install.packages("ggplot2")
+
+library(DESeq2)
+library(dplyr)
+library(ggplot2)
+```
+
+## Code
+```r
+# ----------------------------------------------------------
+# Step 1: Load data
+# ----------------------------------------------------------
+counts   <- read.csv("counts.csv",   row.names = 1, check.names = FALSE)
+metadata <- read.csv("metadata.csv", stringsAsFactors = FALSE)
+
+# Ensure sample order matches between counts and metadata
+metadata <- metadata[match(colnames(counts), metadata$sample), ]
+
+# ----------------------------------------------------------
+# Step 2: Create DESeq2 object
+# ----------------------------------------------------------
+dds <- DESeqDataSetFromMatrix(
+  countData = counts,
+  colData   = metadata,
+  design    = ~ condition      # change 'condition' to your column name
+)
+
+# Set the reference level (the control/baseline group)
+dds$condition <- relevel(dds$condition, ref = "control")   # change "control" to your baseline
+
+# ----------------------------------------------------------
+# Step 3: Pre-filter low-count genes
+# ----------------------------------------------------------
+# Keep genes with at least 10 counts in 2 or more samples
+keep <- rowSums(counts(dds) >= 10) >= 2
+dds  <- dds[keep, ]
+cat("Genes after filtering:", nrow(dds), "\n")
+
+# ----------------------------------------------------------
+# Step 4: Run DESeq2
+# ----------------------------------------------------------
+dds <- DESeq(dds)
+
+# ----------------------------------------------------------
+# Step 5: Extract results
+# ----------------------------------------------------------
+res <- results(dds,
+               alpha        = 0.05,   # FDR threshold
+               lfcThreshold = 0)      # minimum fold change (set to e.g. 1 for 2-fold)
+
+# Summary of significant genes
+summary(res)
+
+# Convert to data frame and sort by adjusted p-value
+res_df <- as.data.frame(res) %>%
+  arrange(padj) %>%
+  filter(!is.na(padj))
+
+# Add significance label
+res_df$significant <- ifelse(res_df$padj < 0.05 & abs(res_df$log2FoldChange) > 1,
+                             "Yes", "No")
+
+cat("\nNumber of significant DEGs (padj < 0.05, |LFC| > 1):",
+    sum(res_df$significant == "Yes"), "\n")
+
+# ----------------------------------------------------------
+# Step 6: Save results
+# ----------------------------------------------------------
+write.csv(res_df, "DESeq2_results.csv", row.names = TRUE)
+
+# ----------------------------------------------------------
+# Step 7: Quick volcano plot
+# ----------------------------------------------------------
+ggplot(res_df, aes(x = log2FoldChange, y = -log10(padj), color = significant)) +
+  geom_point(size = 1.2, alpha = 0.7) +
+  scale_color_manual(values = c("No" = "#94A3B8", "Yes" = "#2563EB")) +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "#64748B") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "#64748B") +
+  labs(title = "Volcano Plot — DESeq2",
+       x     = "Log2 Fold Change",
+       y     = "-Log10 Adjusted P-value") +
+  theme_minimal(base_size = 13)
+```
+
+## Output
+- `DESeq2_results.csv` — Full results table with columns:
+  `baseMean`, `log2FoldChange`, `lfcSE`, `stat`, `pvalue`, `padj`, `significant`
+- A volcano plot showing the distribution of DEGs
+- Console summary of up/down/non-significant gene counts
+
+## Common Errors & Fixes
+
+**Error:** `"colnames(countData) == rownames(colData) are not all TRUE"`  
+**Fix:** Sample names in your counts columns must exactly match the `sample` column in metadata (case-sensitive, no spaces).
+
+**Error:** `"object 'condition' not found"`  
+**Fix:** Make sure the column name in `design = ~ condition` matches a real column in your metadata CSV.
+
+**Error:** `"less than 2 samples per group"`  
+**Fix:** DESeq2 needs at least 2 samples per group. Check your metadata for typos in the condition column.
+
+**Warning:** `"some variables in design formula are characters, converting to factors"`  
+**Fix:** This is safe to ignore, but you can silence it with `metadata$condition <- as.factor(metadata$condition)` before creating dds.
+
+## References
+- Love MI, Huber W, Anders S (2014). Moderated estimation of fold change and
+  dispersion for RNA-seq data with DESeq2. *Genome Biology*, 15:550.
+  https://doi.org/10.1186/s13059-014-0550-8
+- DESeq2 Bioconductor vignette:
+  https://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html
+```
